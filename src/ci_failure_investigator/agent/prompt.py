@@ -30,7 +30,11 @@ hypotheses unchanged; a hypotheses list is the complete replacement collection, 
 unchanged hypotheses that should remain. Return only the structured decision fields.
 
 Use LIST for repository structure, literal SEARCH for exact observable strings, and READ
-for a bounded repository-relative line range. Prefer READ paths established by repository
+for a bounded repository-relative line range. READ uses 1-based inclusive line numbers:
+start_line must be >= 1, end_line must be >= start_line, and one READ action may request
+at most 200 lines. For larger files, inspect a bounded relevant range first and use later
+READ actions for additional ranges only if evidence justifies them; do not request an
+oversized READ range. Prefer READ paths established by repository
 observation, especially LIST or SEARCH Evidence. A runtime or traceback path does not prove
 that the same repository-relative path exists. FailureUnderstanding may motivate a SEARCH,
 but must not be blindly converted into a READ path. If it mentions an unobserved file, module,

@@ -295,6 +295,23 @@ def test_system_prompt_requires_repository_path_grounding() -> None:
     assert "missing paths do not prove absence" in instructions
 
 
+def test_system_prompt_requires_bounded_read_ranges() -> None:
+    client = FakeClient([FakeResponse(make_transport("SEARCH", query="x"))])
+    OpenAIDecisionPolicy(client, model="test-model")(make_state())
+
+    instructions = client.responses.calls[0]["instructions"]
+    assert "1-based inclusive line numbers" in instructions
+    assert "start_line must be >= 1" in instructions
+    assert "end_line must be >= start_line" in instructions
+    assert "at most 200 lines" in instructions
+    assert "bounded relevant range first" in instructions
+    assert "later" in instructions
+    assert "actions" in instructions
+    assert "additional ranges" in instructions
+    assert "oversized" in instructions
+    assert "READ range" in instructions
+
+
 def test_missing_parsed_output_raises_policy_error() -> None:
     client = FakeClient([FakeResponse(None)])
 
