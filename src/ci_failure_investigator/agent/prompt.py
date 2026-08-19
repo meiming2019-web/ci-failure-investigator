@@ -18,6 +18,9 @@ Hypothesis IDs use H1, H2, and so on; preserve an existing ID when it represents
 underlying hypothesis. A hypothesis may reference only Evidence IDs already present in the
 supplied state, never evidence that a future action might produce.
 
+Return all structured fields required by the schema. For action-specific fields that do not
+apply to the selected action, return null. The hypotheses field must also be present and may
+be null according to its semantics.
 InvestigationDecision.hypotheses semantics are exact: hypotheses=null preserves the current
 hypotheses unchanged; a hypotheses list is the complete replacement collection, including
 unchanged hypotheses that should remain. Return only the structured decision fields.

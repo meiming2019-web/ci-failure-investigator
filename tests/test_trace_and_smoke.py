@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from ci_failure_investigator.agent import (
     ConcludeAction,
@@ -12,16 +12,17 @@ from ci_failure_investigator.agent import (
     run_investigation,
     run_smoke_investigation,
 )
+from ci_failure_investigator.agent.openai_policy import _OpenAIInvestigationDecision
 from ci_failure_investigator.models import Evidence, FailureUnderstanding, InvestigationState
 
 
 class FakeResponse:
-    def __init__(self, decision: InvestigationDecision) -> None:
+    def __init__(self, decision: _OpenAIInvestigationDecision) -> None:
         self.output_parsed = decision
 
 
 class FakeResponses:
-    def __init__(self, decisions: list[InvestigationDecision]) -> None:
+    def __init__(self, decisions: list[_OpenAIInvestigationDecision]) -> None:
         self.responses = iter(FakeResponse(decision) for decision in decisions)
         self.calls: list[dict[str, Any]] = []
 
@@ -31,7 +32,7 @@ class FakeResponses:
         model: str,
         input: str,
         instructions: str,
-        text_format: type[InvestigationDecision],
+        text_format: type[_OpenAIInvestigationDecision],
     ) -> FakeResponse:
         self.calls.append(
             {
@@ -45,8 +46,28 @@ class FakeResponses:
 
 
 class FakeClient:
-    def __init__(self, decisions: list[InvestigationDecision]) -> None:
+    def __init__(self, decisions: list[_OpenAIInvestigationDecision]) -> None:
         self.responses = FakeResponses(decisions)
+
+
+def make_transport(
+    action_type: Literal["LIST", "SEARCH", "READ", "CONCLUDE"],
+    *,
+    path: str | None = None,
+    query: str | None = None,
+    file_glob: str | None = None,
+    start_line: int | None = None,
+    end_line: int | None = None,
+) -> _OpenAIInvestigationDecision:
+    return _OpenAIInvestigationDecision(
+        action_type=action_type,
+        path=path,
+        query=query,
+        file_glob=file_glob,
+        start_line=start_line,
+        end_line=end_line,
+        hypotheses=None,
+    )
 
 
 def make_state(
@@ -178,9 +199,9 @@ def test_smoke_runner_composes_log_policy_graph_and_tools(tmp_path: Path) -> Non
     (tmp_path / "app.py").write_text("needle\n", encoding="utf-8")
     client = FakeClient(
         [
-            InvestigationDecision(action=SearchAction(query="needle")),
-            InvestigationDecision(action=ReadAction(path="app.py", start_line=1, end_line=1)),
-            InvestigationDecision(action=ConcludeAction()),
+            make_transport("SEARCH", query="needle"),
+            make_transport("READ", path="app.py", start_line=1, end_line=1),
+            make_transport("CONCLUDE"),
         ]
     )
 
@@ -201,7 +222,7 @@ def test_smoke_runner_composes_log_policy_graph_and_tools(tmp_path: Path) -> Non
 def test_smoke_runner_propagates_configured_budget(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("content\n", encoding="utf-8")
     client = FakeClient(
-        [InvestigationDecision(action=ReadAction(path="app.py", start_line=1, end_line=1))]
+        [make_transport("READ", path="app.py", start_line=1, end_line=1)]
     )
 
     result = run_smoke_investigation(
