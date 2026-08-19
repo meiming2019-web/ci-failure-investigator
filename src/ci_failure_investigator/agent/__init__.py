@@ -12,14 +12,20 @@ from ci_failure_investigator.agent.graph import (
     TerminationReason,
     run_investigation,
 )
+from ci_failure_investigator.agent.openai_policy import (
+    DecisionPolicyError,
+    OpenAIDecisionPolicy,
+)
 
 __all__ = [
     "Action",
     "ConcludeAction",
     "DecisionPolicy",
+    "DecisionPolicyError",
     "InvestigationDecision",
     "InvestigationRunResult",
     "ListAction",
+    "OpenAIDecisionPolicy",
     "ReadAction",
     "SearchAction",
     "TerminationReason",
