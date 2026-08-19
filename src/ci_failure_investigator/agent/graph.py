@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ci_failure_investigator.agent.actions import (
     Action,
@@ -14,6 +14,7 @@ from ci_failure_investigator.agent.actions import (
     ReadAction,
     SearchAction,
 )
+from ci_failure_investigator.agent.trace import InvestigationTraceStep
 from ci_failure_investigator.models import (
     Evidence,
     InvestigationState,
@@ -38,6 +39,7 @@ class InvestigationRunResult(BaseModel):
 
     state: InvestigationState
     termination_reason: TerminationReason
+    trace: list[InvestigationTraceStep] = Field(default_factory=list)
 
 
 DecisionPolicy = Callable[[InvestigationState], InvestigationDecision]
@@ -47,6 +49,7 @@ class _GraphState(TypedDict):
     investigation: InvestigationState
     pending_action: Action | None
     termination_reason: TerminationReason | None
+    trace: list[InvestigationTraceStep]
 
 
 def _rebuild_state(state: InvestigationState, **updates: object) -> InvestigationState:
@@ -93,6 +96,11 @@ def _decision_node(policy: DecisionPolicy, graph_state: _GraphState) -> dict[str
         }
 
     decision = policy(_rebuild_state(current))
+    trace_step = InvestigationTraceStep(
+        iteration=len(graph_state["trace"]) + 1,
+        decision=decision,
+    )
+    trace = [*graph_state["trace"], trace_step]
     updated = current
     if decision.hypotheses is not None:
         updated = _rebuild_state(current, hypotheses=decision.hypotheses)
@@ -102,8 +110,9 @@ def _decision_node(policy: DecisionPolicy, graph_state: _GraphState) -> dict[str
             "investigation": updated,
             "pending_action": None,
             "termination_reason": TerminationReason.CONCLUDED,
+            "trace": trace,
         }
-    return {"investigation": updated, "pending_action": decision.action}
+    return {"investigation": updated, "pending_action": decision.action, "trace": trace}
 
 
 def _execute_node(repo_root: str | Path, graph_state: _GraphState) -> dict[str, object]:
@@ -150,12 +159,20 @@ def _execute_node(repo_root: str | Path, graph_state: _GraphState) -> dict[str, 
         step_number=new_tool_calls_used,
         metadata=metadata,
     )
+    trace = [
+        *graph_state["trace"][:-1],
+        InvestigationTraceStep(
+            iteration=graph_state["trace"][-1].iteration,
+            decision=graph_state["trace"][-1].decision,
+            evidence_id=evidence.id,
+        ),
+    ]
     updated = _rebuild_state(
         current,
         evidence=[*current.evidence, evidence],
         tool_calls_used=new_tool_calls_used,
     )
-    return {"investigation": updated, "pending_action": None}
+    return {"investigation": updated, "pending_action": None, "trace": trace}
 
 
 def _route_after_decision(graph_state: _GraphState) -> str:
@@ -186,10 +203,12 @@ def run_investigation(
             "investigation": initial_state,
             "pending_action": None,
             "termination_reason": None,
+            "trace": [],
         },
         config={"recursion_limit": max(10, initial_state.tool_call_budget * 3 + 3)},
     )
     return InvestigationRunResult(
         state=final_state["investigation"],
         termination_reason=final_state["termination_reason"],
+        trace=final_state["trace"],
     )

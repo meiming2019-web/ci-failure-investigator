@@ -16,6 +16,8 @@ from ci_failure_investigator.agent.openai_policy import (
     DecisionPolicyError,
     OpenAIDecisionPolicy,
 )
+from ci_failure_investigator.agent.smoke import run_smoke_investigation
+from ci_failure_investigator.agent.trace import InvestigationTraceStep
 
 __all__ = [
     "Action",
@@ -24,10 +26,12 @@ __all__ = [
     "DecisionPolicyError",
     "InvestigationDecision",
     "InvestigationRunResult",
+    "InvestigationTraceStep",
     "ListAction",
     "OpenAIDecisionPolicy",
     "ReadAction",
     "SearchAction",
     "TerminationReason",
     "run_investigation",
+    "run_smoke_investigation",
 ]
