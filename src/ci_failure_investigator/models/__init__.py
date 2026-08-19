@@ -5,6 +5,7 @@ from ci_failure_investigator.models.failure import (
 	TracebackFrame,
 )
 from ci_failure_investigator.models.hypothesis import Hypothesis, HypothesisStatus
+from ci_failure_investigator.models.investigation import InvestigationState
 from ci_failure_investigator.models.repository import (
 	RepositoryEntry,
 	RepositoryEntryType,
@@ -20,6 +21,7 @@ __all__ = [
 	"FailureUnderstanding",
 	"Hypothesis",
 	"HypothesisStatus",
+	"InvestigationState",
 	"RepositoryEntry",
 	"RepositoryEntryType",
 	"RepositoryListResult",
