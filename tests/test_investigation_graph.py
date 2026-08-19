@@ -18,7 +18,6 @@ from ci_failure_investigator.models import (
     Hypothesis,
     InvestigationState,
 )
-from ci_failure_investigator.tools import RepositoryToolError
 
 
 def make_state(
@@ -223,7 +222,76 @@ def test_invalid_prospective_grounding_is_rejected_before_tool_execution(tmp_pat
     assert initial.hypotheses == []
 
 
-def test_repository_tool_error_propagates_without_retry_or_mutation(tmp_path: Path) -> None:
+def test_repository_tool_error_becomes_evidence_and_allows_conclusion(tmp_path: Path) -> None:
+    decisions = iter(
+        [
+            InvestigationDecision(
+                action=ReadAction(path="missing.py", start_line=1, end_line=1),
+                hypotheses=[make_hypothesis("H1")],
+            ),
+            InvestigationDecision(action=ConcludeAction()),
+        ]
+    )
+
+    result = run_investigation(make_state(), tmp_path, lambda state: next(decisions))
+
+    error_evidence = result.state.evidence[0]
+    assert result.termination_reason is TerminationReason.CONCLUDED
+    assert result.trace[0].decision.action.action_type == "READ"
+    assert result.trace[0].evidence_id == "E1"
+    assert error_evidence.source_type == "repository_tool_error"
+    assert "READ path does not exist" in error_evidence.observation
+    assert error_evidence.metadata == {
+        "operation": "READ",
+        "error_type": "RepositoryToolError",
+        "path": "missing.py",
+        "start_line": 1,
+        "end_line": 1,
+    }
+    assert result.state.tool_calls_used == 1
+    assert result.state.hypotheses == [make_hypothesis("H1")]
+
+
+def test_repository_error_evidence_is_visible_to_next_policy_call(tmp_path: Path) -> None:
+    seen_states: list[InvestigationState] = []
+    decisions = iter(
+        [
+            InvestigationDecision(action=ReadAction(path="missing.py", start_line=1, end_line=1)),
+            InvestigationDecision(action=ConcludeAction()),
+        ]
+    )
+
+    def policy(state: InvestigationState) -> InvestigationDecision:
+        seen_states.append(state)
+        return next(decisions)
+
+    run_investigation(make_state(), tmp_path, policy)
+
+    assert len(seen_states) == 2
+    assert seen_states[1].evidence[0].source_type == "repository_tool_error"
+    assert seen_states[1].evidence[0].id == "E1"
+
+
+def test_model_recovers_after_repository_tool_error(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("needle\n", encoding="utf-8")
+    decisions = iter(
+        [
+            InvestigationDecision(action=ReadAction(path="missing.py", start_line=1, end_line=1)),
+            InvestigationDecision(action=SearchAction(query="needle")),
+            InvestigationDecision(action=ConcludeAction()),
+        ]
+    )
+
+    result = run_investigation(make_state(), tmp_path, lambda state: next(decisions))
+
+    assert result.termination_reason is TerminationReason.CONCLUDED
+    assert [evidence.id for evidence in result.state.evidence] == ["E1", "E2"]
+    assert result.state.evidence[0].source_type == "repository_tool_error"
+    assert result.state.evidence[1].source_type == "repository_search"
+    assert [step.evidence_id for step in result.trace] == ["E1", "E2", None]
+
+
+def test_failed_repository_action_consumes_final_budget(tmp_path: Path) -> None:
     calls = 0
 
     def policy(state: InvestigationState) -> InvestigationDecision:
@@ -231,13 +299,66 @@ def test_repository_tool_error_propagates_without_retry_or_mutation(tmp_path: Pa
         calls += 1
         return InvestigationDecision(action=ReadAction(path="missing.py", start_line=1, end_line=1))
 
-    initial = make_state()
-    with pytest.raises(RepositoryToolError):
-        run_investigation(initial, tmp_path, policy)
+    result = run_investigation(make_state(tool_call_budget=1), tmp_path, policy)
 
     assert calls == 1
-    assert initial.tool_calls_used == 0
-    assert initial.evidence == []
+    assert result.termination_reason is TerminationReason.BUDGET_EXHAUSTED
+    assert result.state.tool_calls_used == 1
+    assert result.state.evidence[0].source_type == "repository_tool_error"
+    assert len(result.trace) == 1
+    assert result.trace[0].evidence_id == "E1"
+
+
+def test_repository_error_evidence_uses_smallest_available_identifier(tmp_path: Path) -> None:
+    state = make_state(evidence=[make_evidence("E1"), make_evidence("E3")])
+    decisions = iter(
+        [
+            InvestigationDecision(action=ReadAction(path="missing.py", start_line=1, end_line=1)),
+            InvestigationDecision(action=ConcludeAction()),
+        ]
+    )
+
+    result = run_investigation(state, tmp_path, lambda current: next(decisions))
+
+    assert result.state.evidence[-1].id == "E2"
+    assert result.trace[0].evidence_id == "E2"
+
+
+def test_list_repository_tool_error_is_recoverable(tmp_path: Path) -> None:
+    decisions = iter(
+        [
+            InvestigationDecision(action=ListAction(path="missing")),
+            InvestigationDecision(action=ConcludeAction()),
+        ]
+    )
+
+    result = run_investigation(make_state(), tmp_path, lambda state: next(decisions))
+
+    assert result.termination_reason is TerminationReason.CONCLUDED
+    assert result.state.evidence[0].source_type == "repository_tool_error"
+    assert result.state.evidence[0].metadata == {
+        "operation": "LIST",
+        "error_type": "RepositoryToolError",
+        "path": "missing",
+    }
+
+
+def test_unexpected_repository_exception_propagates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import ci_failure_investigator.agent.graph as graph_module
+
+    def raise_unexpected(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("unexpected repository failure")
+
+    monkeypatch.setattr(graph_module, "read_repository_file", raise_unexpected)
+
+    with pytest.raises(RuntimeError, match="unexpected repository failure"):
+        run_investigation(
+            make_state(),
+            tmp_path,
+            lambda state: InvestigationDecision(
+                action=ReadAction(path="app.py", start_line=1, end_line=1)
+            ),
+        )
 
 
 def test_action_validation_rejects_invalid_ranges_and_queries() -> None:

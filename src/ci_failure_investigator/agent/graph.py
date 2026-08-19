@@ -23,6 +23,7 @@ from ci_failure_investigator.models import (
     RepositorySearchResult,
 )
 from ci_failure_investigator.tools import (
+    RepositoryToolError,
     list_repository_path,
     read_repository_file,
     search_repository,
@@ -87,6 +88,52 @@ def _format_read(result: RepositoryReadResult) -> str:
     return result.content
 
 
+def _repository_error_evidence(
+    state: InvestigationState,
+    action: Action,
+    error: RepositoryToolError,
+) -> Evidence:
+    metadata: dict[str, object]
+    if isinstance(action, ListAction):
+        source_location = action.path
+        metadata = {
+            "operation": "LIST",
+            "error_type": "RepositoryToolError",
+            "path": action.path,
+        }
+    elif isinstance(action, SearchAction):
+        source_location = f"search:{action.query}"
+        metadata = {
+            "operation": "SEARCH",
+            "error_type": "RepositoryToolError",
+            "query": action.query,
+        }
+        if action.file_glob is not None:
+            source_location += f" [{action.file_glob}]"
+            metadata["file_glob"] = action.file_glob
+    elif isinstance(action, ReadAction):
+        source_location = f"{action.path}:{action.start_line}-{action.end_line}"
+        metadata = {
+            "operation": "READ",
+            "error_type": "RepositoryToolError",
+            "path": action.path,
+            "start_line": action.start_line,
+            "end_line": action.end_line,
+        }
+    else:
+        raise TypeError(f"unsupported repository action: {action.action_type}")
+
+    step_number = state.tool_calls_used + 1
+    return Evidence(
+        id=_next_evidence_id(state),
+        source_type="repository_tool_error",
+        source_location=source_location,
+        observation=str(error),
+        step_number=step_number,
+        metadata=metadata,
+    )
+
+
 def _decision_node(policy: DecisionPolicy, graph_state: _GraphState) -> dict[str, object]:
     current = graph_state["investigation"]
     if current.tool_calls_used >= current.tool_call_budget:
@@ -121,34 +168,54 @@ def _execute_node(repo_root: str | Path, graph_state: _GraphState) -> dict[str, 
     if action is None:
         raise RuntimeError("execute node requires a pending action")
 
-    if isinstance(action, ListAction):
-        list_result = list_repository_path(repo_root, action.path)
-        source_type = "repository_list"
-        source_location = list_result.path
-        observation = _format_list(list_result)
-        metadata = {"operation": "LIST", "truncated": list_result.truncated}
-    elif isinstance(action, SearchAction):
-        search_result = search_repository(repo_root, action.query, action.file_glob)
-        source_type = "repository_search"
-        source_location = f"search:{action.query}"
-        if action.file_glob is not None:
-            source_location += f" [{action.file_glob}]"
-        observation = _format_search(search_result)
-        metadata = {
-            "operation": "SEARCH",
-            "query": action.query,
-            "truncated": search_result.truncated,
-        }
-        if action.file_glob is not None:
-            metadata["file_glob"] = action.file_glob
-    elif isinstance(action, ReadAction):
-        read_result = read_repository_file(repo_root, action.path, action.start_line, action.end_line)
-        source_type = "repository_read"
-        source_location = f"{read_result.path}:{read_result.start_line}-{read_result.end_line}"
-        observation = _format_read(read_result)
-        metadata = {"operation": "READ"}
-    else:
-        raise TypeError(f"unsupported repository action: {action.action_type}")
+    try:
+        if isinstance(action, ListAction):
+            list_result = list_repository_path(repo_root, action.path)
+            source_type = "repository_list"
+            source_location = list_result.path
+            observation = _format_list(list_result)
+            metadata = {"operation": "LIST", "truncated": list_result.truncated}
+        elif isinstance(action, SearchAction):
+            search_result = search_repository(repo_root, action.query, action.file_glob)
+            source_type = "repository_search"
+            source_location = f"search:{action.query}"
+            if action.file_glob is not None:
+                source_location += f" [{action.file_glob}]"
+            observation = _format_search(search_result)
+            metadata = {
+                "operation": "SEARCH",
+                "query": action.query,
+                "truncated": search_result.truncated,
+            }
+            if action.file_glob is not None:
+                metadata["file_glob"] = action.file_glob
+        elif isinstance(action, ReadAction):
+            read_result = read_repository_file(
+                repo_root, action.path, action.start_line, action.end_line
+            )
+            source_type = "repository_read"
+            source_location = f"{read_result.path}:{read_result.start_line}-{read_result.end_line}"
+            observation = _format_read(read_result)
+            metadata = {"operation": "READ"}
+        else:
+            raise TypeError(f"unsupported repository action: {action.action_type}")
+    except RepositoryToolError as error:
+        error_evidence = _repository_error_evidence(current, action, error)
+        new_tool_calls_used = current.tool_calls_used + 1
+        trace = [
+            *graph_state["trace"][:-1],
+            InvestigationTraceStep(
+                iteration=graph_state["trace"][-1].iteration,
+                decision=graph_state["trace"][-1].decision,
+                evidence_id=error_evidence.id,
+            ),
+        ]
+        updated = _rebuild_state(
+            current,
+            evidence=[*current.evidence, error_evidence],
+            tool_calls_used=new_tool_calls_used,
+        )
+        return {"investigation": updated, "pending_action": None, "trace": trace}
 
     new_tool_calls_used = current.tool_calls_used + 1
     evidence = Evidence(
