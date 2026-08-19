@@ -5,6 +5,14 @@ from ci_failure_investigator.models.failure import (
 	TracebackFrame,
 )
 from ci_failure_investigator.models.hypothesis import Hypothesis, HypothesisStatus
+from ci_failure_investigator.models.repository import (
+	RepositoryEntry,
+	RepositoryEntryType,
+	RepositoryListResult,
+	RepositoryReadResult,
+	RepositorySearchMatch,
+	RepositorySearchResult,
+)
 
 __all__ = [
 	"Evidence",
@@ -12,5 +20,11 @@ __all__ = [
 	"FailureUnderstanding",
 	"Hypothesis",
 	"HypothesisStatus",
+	"RepositoryEntry",
+	"RepositoryEntryType",
+	"RepositoryListResult",
+	"RepositoryReadResult",
+	"RepositorySearchMatch",
+	"RepositorySearchResult",
 	"TracebackFrame",
 ]
